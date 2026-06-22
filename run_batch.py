@@ -21,9 +21,11 @@ then ALL pending gcmc rows, each phase by ascending cell multiplier (cheap MOFs
 bank first, the 64x tail runs last). N=12 concurrent serial RASPA jobs. The pool
 is threads owning `simulate` subprocesses, so a SIGTERM tears every worker down.
 
-Success = "Simulation finished" AND the target value(s) parse finite. Failure ->
-failed + one-line note, never retried. Atomic manifest/voids writes. Exit 0 if
-the queue ran (failures included); nonzero only if it cannot run at all.
+Success = RASPA's final-averages block parsed to finite value(s); the stdout
+completion banner is NOT used as a gate (its wording varies by build). A `failed`
+row that has in fact completed is re-read and salvaged to `done` on the next run
+rather than recomputed. Atomic manifest/voids writes. Exit 0 if the queue ran
+(failures included); nonzero only if it cannot run at all.
 """
 import argparse
 import csv
@@ -231,36 +233,37 @@ def _run_simulate(jobdir):
 
 
 def _read_output(jobdir):
-    log = os.path.join(jobdir, "raspa.log")
-    finished = False
+    """RASPA's stdout (raspa.log) plus every Output/System_0/*.data file, as one
+    blob. Completion is judged downstream by whether the final-averages block
+    actually parsed -- not by a stdout 'Simulation finished' banner. That banner's
+    exact wording varies between RASPA builds, so gating on it silently failed
+    runs that had in fact completed and written their results to disk."""
+    blob = ""
     try:
-        with open(log, errors="ignore") as f:
-            finished = "Simulation finished" in f.read()
+        blob += open(os.path.join(jobdir, "raspa.log"), errors="ignore").read()
     except OSError:
         pass
     outdir = os.path.join(jobdir, "Output", "System_0")
-    blob = ""
     if os.path.isdir(outdir):
-        for fn in os.listdir(outdir):
+        for fn in sorted(os.listdir(outdir)):
             if fn.endswith(".data"):
                 try:
-                    blob += open(os.path.join(outdir, fn), errors="ignore").read()
+                    blob += "\n" + open(os.path.join(outdir, fn), errors="ignore").read()
                 except OSError:
                     pass
-    return finished, blob
+    return blob
 
 
 def parse_gcmc(jobdir):
-    finished, blob = _read_output(jobdir)
-    if not finished:
-        return None, "no 'Simulation finished' banner"
-    if not blob:
-        return None, "no Output/System_0/*.data"
+    blob = _read_output(jobdir)
+    if not blob.strip():
+        return None, "no RASPA output (raspa.log + Output/System_0 both empty)"
     m_abs = RE_ABS_GRAV.search(blob)
     m_exc = RE_EXC_GRAV.search(blob)
     m_vol = RE_ABS_VOL.search(blob)
     if not (m_abs and m_exc and m_vol):
-        return None, "loading lines (abs/exc mol/kg + abs vol) not all found"
+        tail = " ".join(blob.split())[-180:]
+        return None, f"no final-loading block -- RASPA did not complete (tail: ...{tail})"
     try:
         abs_g = float(m_abs.group(1))
         err = float(m_abs.group(2)) if m_abs.group(2) else 0.0
@@ -275,9 +278,9 @@ def parse_gcmc(jobdir):
 
 
 def parse_void(jobdir):
-    finished, blob = _read_output(jobdir)
-    if not finished:
-        return None, "no 'Simulation finished' banner"
+    blob = _read_output(jobdir)
+    if not blob.strip():
+        return None, "no RASPA output (raspa.log + Output/System_0 both empty)"
     for rx in RE_VOID:
         m = rx.search(blob)
         if m:
@@ -369,11 +372,48 @@ def main():
     if args.only is not None and args.only not in ids:
         _fail(f"--only {args.only}: not in {os.path.basename(manifest)}")
 
-    # resume: stale `running` -> pending + wipe job dir; --only forces its row pending
+    # salvage: rows an earlier build marked `failed` purely on the banner gate may
+    # actually have completed and written their results. Re-read their existing
+    # output (no recompute) and flip any that now parse to `done`, before we work
+    # out what is still pending. Genuine failures (no job dir, or no final block)
+    # are left as-is.
+    salvaged = 0
     with _mlock:
         rows = read_manifest(manifest)
         for r in rows:
-            if r["status"] == "running" or (args.only and r["row_id"] == args.only):
+            if r["status"] != "failed":
+                continue
+            if args.only and r["row_id"] != args.only:
+                continue
+            jd = os.path.join(JOBS, r["row_id"])
+            if not os.path.isdir(jd):
+                continue
+            if r["jobtype"] == "gcmc":
+                res, _ = parse_gcmc(jd)
+                if res is not None:
+                    r.update(status="done", note="salvaged",
+                             uptake_abs=f"{res['abs']:.6g}",
+                             uptake_exc=f"{res['exc']:.6g}",
+                             uptake_err=f"{res['err']:.6g}")
+                    salvaged += 1
+            elif r["jobtype"] == "void":
+                vf, _ = parse_void(jd)
+                if vf is not None:
+                    r.update(status="done", note="salvaged",
+                             void_fraction=f"{vf:.6g}")
+                    salvaged += 1
+        if salvaged:
+            write_manifest(manifest, rows)
+    if salvaged:
+        print(f"salvaged {salvaged} previously-failed row(s) by re-reading existing output")
+
+    # resume: stale `running` -> pending + wipe job dir; --only forces a *re-run*
+    # of its row -- but not one salvage just marked done (don't bin good output).
+    with _mlock:
+        rows = read_manifest(manifest)
+        for r in rows:
+            forced = bool(args.only) and r["row_id"] == args.only and r["status"] != "done"
+            if r["status"] == "running" or forced:
                 r["status"] = "pending"
                 r["note"] = ""
                 shutil.rmtree(os.path.join(JOBS, r["row_id"]), ignore_errors=True)
