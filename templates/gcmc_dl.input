@@ -1,0 +1,21 @@
+SimulationType                MonteCarlo
+NumberOfCycles                __NCYC__
+NumberOfInitializationCycles  __NINIT__
+PrintEvery                    1000
+ForceField                    __FF__
+ChargeMethod                  Ewald
+EwaldPrecision                1e-6
+UseChargesFromCIFFile         no
+Framework 0
+FrameworkName                 __MOF__
+UnitCells                     __CELLS__
+HeliumVoidFraction            __VF__
+ExternalTemperature           __T__
+ExternalPressure              __P__
+Component 0 MoleculeName               hydrogen_dl
+            MoleculeDefinition         ExampleDefinitions
+            MolFraction                1.0
+            TranslationProbability     1.0
+            RotationProbability        1.0
+            ReinsertionProbability     1.0
+            SwapProbability            1.0

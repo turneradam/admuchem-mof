@@ -1,0 +1,15 @@
+SimulationType                MonteCarlo
+NumberOfCycles                5000
+PrintEvery                    1000
+ForceField                    Generic
+UseChargesFromCIFFile         no
+Framework 0
+FrameworkName                 __MOF__
+UnitCells                     __CELLS__
+ExternalTemperature           298.0
+Component 0 MoleculeName              helium
+            MoleculeDefinition        ExampleDefinitions
+            StartingBead              0
+            IdealGasRosenbluthWeight  1.0
+            WidomProbability          1.0
+            CreateNumberOfMolecules   0

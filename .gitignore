@@ -1,0 +1,13 @@
+# driver-created / large / regenerated — never committed
+jobs/
+uploads/
+Output/
+*.data
+repo/
+voids.csv
+__pycache__/
+*.pyc
+
+# local scratch + deploy artifacts
+test/
+*.zip
